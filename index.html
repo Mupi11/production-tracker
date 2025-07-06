@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Garments Tracker | Admin Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- External libs -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #f0f4f8; }
+    .toast { position: fixed; bottom: 20px; right: 20px; background: #1e3a8a; color:white; padding:10px 20px; border-radius:5px; display:none; }
+    #loginModal { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; }
+  </style>
+</head>
+<body class="min-h-screen bg-gray-100 text-black">
+  <!-- Login Modal -->
+  <div id="loginModal">
+    <div class="bg-white p-6 rounded shadow-lg w-96">
+      <h2 class="text-xl font-bold mb-4">Admin Login</h2>
+      <input id="username" placeholder="Username" class="border p-2 w-full mb-2" />
+      <input id="password" type="password" placeholder="Password" class="border p-2 w-full mb-4" />
+      <button onclick="login()" class="bg-blue-600 text-white p-2 w-full rounded">Login</button>
+    </div>
+  </div>
+
+  <!-- Admin Panel -->
+  <header class="bg-blue-900 text-white p-4 text-center">
+    <h1 class="text-2xl font-bold">Garments Tracker</h1>
+    <p class="text-sm">Production Admin Panel</p>
+  </header>
+  <div class="p-4">
+
+    <!-- Summary Cards -->
+    <div id="summaryCards" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-4"></div>
+
+    <!-- Controls Row -->
+    <div class="flex flex-wrap gap-2 mb-4">
+      <input type="text" id="searchInput" placeholder="Search Order ID or Item" oninput="filterTable()" class="border p-2 rounded">
+      <select id="statusFilter" onchange="filterTable()" class="border p-2 rounded">
+        <option value="">All Status</option><option>Pending</option><option>In Progress</option><option>Completed</option>
+      </select>
+      <input type="date" id="exportDate" class="border p-2 rounded">
+      <button onclick="exportAllCSV()" class="bg-blue-600 text-white p-2 rounded">Export All CSV</button>
+      <button onclick="exportToExcel()" class="bg-green-600 text-white p-2 rounded">Export Excel</button>
+      <input type="file" id="importFile" class="border p-2 rounded" onchange="importData(this.files[0])">
+      <button onclick="backupData()" class="bg-yellow-500 text-white p-2 rounded">Backup JSON</button>
+      <button onclick="toggleDarkMode()" class="bg-gray-700 text-white p-2 rounded">Toggle Dark Mode</button>
+    </div>
+
+    <!-- Form -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+      <input type="text" id="orderID" placeholder="Order ID" class="border p-2 rounded">
+      <select id="garmentType" class="border p-2 rounded"><option>Shirt</option><option>Trousers</option><option>Kurti</option></select>
+      <input type="number" id="quantity" placeholder="Quantity" class="border p-2 rounded">
+      <input type="text" id="assignedWorker" placeholder="Assigned Worker" class="border p-2 rounded">
+      <input type="text" id="materialsUsed" placeholder="Materials Used" class="border p-2 rounded">
+      <select id="qcStatus" class="border p-2 rounded"><option>Pass</option><option>Fail</option></select>
+      <select id="status" class="border p-2 rounded"><option>Pending</option><option>In Progress</option><option>Completed</option></select>
+      <input type="date" id="expectedDate" class="border p-2 rounded">
+      <textarea id="remarks" placeholder="Remarks" class="border p-2 rounded col-span-full"></textarea>
+    </div>
+    <button onclick="submitForm()" class="bg-indigo-600 text-white p-2 rounded mb-4">Submit Order</button>
+
+    <!-- Table -->
+    <table class="w-full bg-white rounded shadow mb-4">
+      <thead class="bg-blue-800 text-white text-sm"><tr>
+        <th class="px-4 py-2">Order ID</th><th>Garment</th><th>Qty</th><th>Worker</th><th>Materials</th><th>QC</th><th>Status</th><th>Deadline</th><th>Actions</th><th>Remarks</th>
+      </tr></thead>
+      <tbody id="ordersTable"></tbody>
+    </table>
+
+    <!-- Chart -->
+    <div class="grid grid-cols-1 md:grid-cols-1 gap-4">
+      <canvas id="statusChart" height="200"></canvas>
+    </div>
+
+  </div>
+  <div class="toast" id="toast"></div>
+  <footer class="text-center bg-blue-900 text-white p-3 mt-8">&copy; 2025 Garments Tracker</footer>
+
+  <script>
+    let orders = JSON.parse(localStorage.getItem("ordersList") || "[]");
+
+    //–– Authentication
+    function login() {
+      const u = document.getElementById("username").value;
+      const p = document.getElementById("password").value;
+      if (u === "admin" && p === "1234") {
+        document.getElementById("loginModal").style.display = "none";
+        initApp();
+      } else showToast("Invalid credentials");
+    }
+
+    function initApp() {
+      renderTable();
+      drawStatusChart();
+      updateSummaryCards();
+      checkOverdueOrders();
+    }
+
+    //–– Toast
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg; t.style.display = "block";
+      setTimeout(() => t.style.display = "none", 3000);
+    }
+
+    function toggleDarkMode() {
+      document.body.classList.toggle("bg-gray-900");
+      document.body.classList.toggle("text-white");
+    }
+
+    function getStatusColor(s) {
+      return s==="Pending"?"bg-yellow-400 text-black": s==="In Progress"?"bg-blue-500 text-white":"bg-green-500 text-white";
+    }
+
+    function getDeadlineStyle(d) {
+      const today = new Date().toISOString().split('T')[0];
+      if (!d) return "";
+      if (d < today) return "bg-red-500 text-white";
+      if (d === today) return "bg-yellow-400 text-black";
+      return "bg-green-100 text-black";
+    }
+
+    //–– CRUD
+    function submitForm() {
+      const id = document.getElementById("orderID").value.trim();
+      if (!id) return showToast("Order ID required");
+      const data = {
+        id,
+        item: document.getElementById("garmentType").value,
+        quantity: document.getElementById("quantity").value,
+        worker: document.getElementById("assignedWorker").value,
+        materials: document.getElementById("materialsUsed").value,
+        qc: document.getElementById("qcStatus").value,
+        status: document.getElementById("status").value,
+        date: new Date().toISOString().split('T')[0],
+        deadline: document.getElementById("expectedDate").value,
+        remarks: document.getElementById("remarks").value
+      };
+      orders.push(data);
+      saveOrders();
+      clearForm();
+      initApp();
+      showToast("Order saved");
+    }
+
+    function editOrder(i) {
+      const o = orders.splice(i,1)[0];
+      Object.entries(o).forEach(([k,v])=> {
+        if(document.getElementById(k)) document.getElementById(k).value = v;
+      });
+      saveOrders(); initApp();
+    }
+
+    function deleteOrder(i) {
+      if(confirm("Delete?")) {
+        orders.splice(i,1);
+        saveOrders(); initApp(); showToast("Deleted");
+      }
+    }
+
+    function clearForm() {
+      document.querySelectorAll("input,textarea,select").forEach(el => el.value = "");
+    }
+
+    function saveOrders() {
+      localStorage.setItem("ordersList", JSON.stringify(orders));
+    }
+
+    //–– Rendering
+    function renderTable() {
+      const tbody = document.getElementById("ordersTable");
+      tbody.innerHTML = "";
+      orders.forEach((o,i)=>{
+        tbody.innerHTML += `
+        <tr class="text-center border-b text-sm">
+          <td class="p-2">${o.id}</td>
+          <td class="p-2">${o.item}</td>
+          <td class="p-2">${o.quantity}</td>
+          <td class="p-2">${o.worker}</td>
+          <td class="p-2">${o.materials}</td>
+          <td class="p-2">${o.qc}</td>
+          <td class="p-2"><span class="${getStatusColor(o.status)} inline-block py-0.5 px-2 rounded">${o.status}</span></td>
+          <td class="p-2 ${getDeadlineStyle(o.deadline)}">${o.deadline}</td>
+          <td class="p-2">
+            <button onclick="editOrder(${i})" class="text-blue-600">✏️</button>
+            <button onclick="deleteOrder(${i})" class="text-red-600 ml-2">🗑️</button>
+          </td>
+          <td class="p-2">${o.remarks}</td>
+        </tr>`;
+      });
+    }
+
+    function drawStatusChart() {
+      const counts = {Pending:0,"In Progress":0,Completed:0};
+      orders.forEach(o=>counts[o.status]++);
+      const ctx = document.getElementById("statusChart").getContext("2d");
+      if(window.chart) window.chart.destroy();
+      window.chart = new Chart(ctx, {
+        type:"pie",
+        data:{labels:Object.keys(counts),datasets:[{data:Object.values(counts),backgroundColor:['#facc15','#3b82f6','#10b981']}]},
+        options:{plugins:{title:{display:true,text:"Order Status Breakdown"}}}
+      });
+    }
+
+    function updateSummaryCards() {
+      const today = new Date().toISOString().split('T')[0];
+      const pending = orders.filter(o=>o.status==="Pending").length;
+      const inprog = orders.filter(o=>o.status==="In Progress").length;
+      const comp = orders.filter(o=>o.status==="Completed").length;
+      const dueToday = orders.filter(o=>o.deadline===today).length;
+      document.getElementById("summaryCards").innerHTML = `
+        <div class="bg-white p-4 shadow rounded">Total: ${orders.length}</div>
+        <div class="bg-yellow-200 p-4 shadow rounded">Pending: ${pending}</div>
+        <div class="bg-blue-200 p-4 shadow rounded">In Progress: ${inprog}</div>
+        <div class="bg-green-200 p-4 shadow rounded">Completed: ${comp}</div>
+        <div class="bg-red-200 p-4 shadow rounded">Due Today: ${dueToday}</div>`;
+    }
+
+    //–– Alerts
+    function checkOverdueOrders() {
+      const today = new Date().toISOString().split('T')[0];
+      const overdue = orders.filter(o=>o.deadline < today && o.status !== "Completed");
+      if(overdue.length) {
+        Swal.fire({
+          icon: "warning",
+          title: "🚨 Overdue orders",
+          text: `${overdue.length} orders are overdue!`,
+        });
+      }
+    }
+
+    //–– Import/Export
+    function exportAllCSV() {
+      let csv = "Order ID,Item,Qty,Worker,Materials,QC,Status,Deadline,Remarks\n";
+      orders.forEach(o=>csv+=`${o.id},${o.item},${o.quantity},${o.worker},${o.materials},${o.qc},${o.status},${o.deadline},${o.remarks}\n`);
+      downloadBlob(csv, "orders.csv","text/csv");
+    }
+
+    function exportToExcel() {
+      const ws = XLSX.utils.json_to_sheet(orders);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,"Orders");
+      XLSX.writeFile(wb,"Garments_Orders.xlsx");
+    }
+
+    function importData(file) {
+      const fr = new FileReader();
+      fr.onload = e=>{
+        try {
+          const arr = JSON.parse(e.target.result);
+          if(!Array.isArray(arr)) throw "Not an array";
+          orders = orders.concat(arr);
+          saveOrders(); initApp(); showToast("Imported");
+        } catch {
+          showToast("Import failed");
+        }
+      };
+      fr.readAsText(file);
+    }
+
+    function backupData() {
+      downloadBlob(JSON.stringify(orders),"orders_backup.json","application/json");
+    }
+
+    function downloadBlob(content,name,type) {
+      const b = new Blob([content],{type});
+      const u = URL.createObjectURL(b);
+      const a = document.createElement("a");
+      a.href = u; a.download = name;
+      a.click();
+    }
+
+    function filterTable() {
+      const s = document.getElementById("searchInput").value.toLowerCase();
+      const st = document.getElementById("statusFilter").value;
+      document.querySelectorAll("#ordersTable tr").forEach(row=>{
+        const t = row.innerText.toLowerCase();
+        row.style.display = t.includes(s) && (st===""||t.includes(st.toLowerCase()))?"":"none";
+      });
+    }
+
+    window.onload = () => { /* wait for login */ };
+  </script>
+</body>
+</html>
